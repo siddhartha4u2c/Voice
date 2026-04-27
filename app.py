@@ -4,6 +4,7 @@ import streamlit as st
 import tempfile
 import os  
 import asyncio
+import re
 
 from openai import OpenAI
 from gtts import gTTS
@@ -14,6 +15,20 @@ EURI_API_KEY = os.getenv("EURI_API_KEY")
 STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
+
+
+def ensure_target_language_text(text: str, language_code: str) -> str:
+    # If the reply is not in the expected script, force a translation pass.
+    script_checks = {
+        "hi-IN": r"[\u0900-\u097F]",  # Devanagari
+        "te-IN": r"[\u0C00-\u0C7F]",  # Telugu
+    }
+    pattern = script_checks.get(language_code)
+    if not pattern:
+        return text
+    if re.search(pattern, text):
+        return text
+    return ""
 
 
 def synthesize_speech(text: str, language_code: str) -> str:
@@ -122,11 +137,26 @@ if audio_input is not None:
     st.write(f"🗣 You said: **{user_text}**")
 
     # ---------------- LLM CALL ----------------
+    language_instruction_map = {
+        "en-US": "English",
+        "hi-IN": "Hindi written in Devanagari script only",
+        "te-IN": "Telugu written in Telugu script only",
+        "es-ES": "Spanish",
+    }
+    target_language_instruction = language_instruction_map.get(language, "English")
+
     try:
         llm_response = client.chat.completions.create(
             model=CHAT_MODEL,
             messages=[
-                {"role": "system", "content": "Reply in the same language as the user."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Reply only in the target language requested by the user. "
+                        f"Target language: {target_language_instruction}. "
+                        "Do not transliterate into English letters."
+                    ),
+                },
                 {"role": "user", "content": user_text},
             ],
             max_tokens=CHAT_MAX_TOKENS,
@@ -136,7 +166,29 @@ if audio_input is not None:
         st.error(f"LLM request failed: {err}")
         st.stop()
 
-    reply = llm_response.choices[0].message.content
+    reply = llm_response.choices[0].message.content.strip()
+    if not ensure_target_language_text(reply, language):
+        try:
+            translate_response = client.chat.completions.create(
+                model=CHAT_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Translate the text into {target_language_instruction}. "
+                            "Return only the translated text, natural and fluent."
+                        ),
+                    },
+                    {"role": "user", "content": reply},
+                ],
+                max_tokens=CHAT_MAX_TOKENS,
+            )
+            translated = translate_response.choices[0].message.content.strip()
+            if ensure_target_language_text(translated, language):
+                reply = translated
+        except Exception:
+            pass
+
     st.write(f"🤖 AI says: **{reply}**")
 
     # ---------------- TEXT TO SPEECH (multilingual neural voices) ----------------
