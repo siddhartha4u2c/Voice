@@ -3,15 +3,49 @@
 import streamlit as st
 import tempfile
 import os  
+import asyncio
 
 from openai import OpenAI
 from gtts import gTTS
+import edge_tts
 
 # ---------------- CONFIG ----------------
 EURI_API_KEY = os.getenv("EURI_API_KEY")
 STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
+
+
+def synthesize_speech(text: str, language_code: str) -> str:
+    voice_map = {
+        "en-US": "en-US-AriaNeural",
+        "hi-IN": "hi-IN-SwaraNeural",
+        "te-IN": "te-IN-ShrutiNeural",
+        "es-ES": "es-ES-ElviraNeural",
+    }
+    voice = voice_map.get(language_code, "en-US-AriaNeural")
+    output_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+
+    try:
+        communicate = edge_tts.Communicate(text=text, voice=voice, rate="+0%")
+        try:
+            asyncio.run(communicate.save(output_file))
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(communicate.save(output_file))
+            loop.close()
+    except Exception:
+        # Fallback to gTTS if edge-tts voice/API fails.
+        lang_map = {
+            "en-US": "en",
+            "hi-IN": "hi",
+            "te-IN": "te",
+            "es-ES": "es",
+        }
+        tts_lang = lang_map.get(language_code, "en")
+        gTTS(text=text, lang=tts_lang).save(output_file)
+
+    return output_file
 
 client = OpenAI(
     api_key=EURI_API_KEY,
@@ -105,18 +139,8 @@ if audio_input is not None:
     reply = llm_response.choices[0].message.content
     st.write(f"🤖 AI says: **{reply}**")
 
-    # ---------------- TEXT TO SPEECH (FREE: gTTS) ----------------
-    lang_map = {
-        "en-US": "en",
-        "hi-IN": "hi",
-        "te-IN": "te",
-        "es-ES": "es",
-    }
-    tts_lang = lang_map.get(language, "en")
-    tts_response = gTTS(text=reply, lang=tts_lang)
-
-    audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-    tts_response.save(audio_file)
+    # ---------------- TEXT TO SPEECH (multilingual neural voices) ----------------
+    audio_file = synthesize_speech(reply, language)
 
     # Play audio in Streamlit
     st.audio(audio_file, format="audio/mp3")
