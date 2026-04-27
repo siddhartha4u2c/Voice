@@ -1,8 +1,6 @@
-#pip install streamlit openai sounddevice scipy gTTS
+#pip install streamlit openai gTTS
 #export EURI_API_KEY="your-key"
 import streamlit as st
-import sounddevice as sd
-import scipy.io.wavfile as wav
 import tempfile
 import os  
 
@@ -20,6 +18,7 @@ client = OpenAI(
 # ---------------- STREAMLIT UI ----------------
 st.set_page_config(page_title="Voice AI Assistant", layout="centered")
 st.title("🎤 Voice AI Assistant (Multilingual)")
+st.caption("Works on Render using browser microphone input.")
 
 language = st.selectbox(
     "Select Language",
@@ -31,19 +30,16 @@ language = st.selectbox(
     }
 )
 
-duration = st.slider("Recording duration (seconds)", 3, 10, 5)
+if not EURI_API_KEY:
+    st.error("EURI_API_KEY is missing. Add it in Render Environment Variables.")
+    st.stop()
 
-if st.button("🎙 Record & Ask"):
-    st.info("Recording... Speak now")
+audio_input = st.audio_input("Record your voice")
 
-    fs = 16000
-    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
-    sd.wait()
-
+if audio_input is not None:
     temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    wav.write(temp_wav.name, fs, recording)
-
-    st.success("Recording complete")
+    temp_wav.write(audio_input.getbuffer())
+    temp_wav.close()
 
     # ---------------- SPEECH TO TEXT (Whisper via EURI) ----------------
     stt_lang_map = {
@@ -54,12 +50,17 @@ if st.button("🎙 Record & Ask"):
     }
     stt_lang = stt_lang_map.get(language, "en")
 
-    with open(temp_wav.name, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            language=stt_lang,
-        )
+    try:
+        with open(temp_wav.name, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language=stt_lang,
+            )
+    except Exception as err:
+        os.remove(temp_wav.name)
+        st.error(f"Transcription failed: {err}")
+        st.stop()
 
     user_text = transcript.text.strip()
     if not user_text:
@@ -68,13 +69,18 @@ if st.button("🎙 Record & Ask"):
     st.write(f"🗣 You said: **{user_text}**")
 
     # ---------------- LLM CALL ----------------
-    llm_response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": "Reply in the same language as the user."},
-            {"role": "user", "content": user_text},
-        ],
-    )
+    try:
+        llm_response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": "Reply in the same language as the user."},
+                {"role": "user", "content": user_text},
+            ],
+        )
+    except Exception as err:
+        os.remove(temp_wav.name)
+        st.error(f"LLM request failed: {err}")
+        st.stop()
 
     reply = llm_response.choices[0].message.content
     st.write(f"🤖 AI says: **{reply}**")
@@ -89,10 +95,11 @@ if st.button("🎙 Record & Ask"):
     tts_lang = lang_map.get(language, "en")
     tts_response = gTTS(text=reply, lang=tts_lang)
 
-    audio_file = "response.mp3"
+    audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
     tts_response.save(audio_file)
 
     # Play audio in Streamlit
     st.audio(audio_file, format="audio/mp3")
 
     os.remove(temp_wav.name)
+    os.remove(audio_file)
