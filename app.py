@@ -33,7 +33,24 @@ def ensure_target_language_text(text: str, language_code: str) -> str:
     return ""
 
 
-def translate_to_target_language(client: OpenAI, text: str, target_language_instruction: str, model: str, max_tokens: int) -> str:
+def contains_latin_letters(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", text))
+
+
+def translate_to_target_language(
+    client: OpenAI,
+    text: str,
+    language_code: str,
+    target_language_instruction: str,
+    model: str,
+    max_tokens: int
+) -> str:
+    script_hint = ""
+    if language_code == "hi-IN":
+        script_hint = "Use only Devanagari script. Do not use any English letters."
+    elif language_code == "te-IN":
+        script_hint = "Use only Telugu script. Do not use any English letters."
+
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -41,7 +58,8 @@ def translate_to_target_language(client: OpenAI, text: str, target_language_inst
                 "role": "system",
                 "content": (
                     f"Translate the text into {target_language_instruction}. "
-                    "Return only translated text. Do not include English."
+                    "Return only translated text. Do not include English. "
+                    f"{script_hint}"
                 ),
             },
             {"role": "user", "content": text},
@@ -86,7 +104,7 @@ def enforce_native_language_reply(
         # Pass 1: translate current draft to target language.
         try:
             translated = translate_to_target_language(
-                client, reply, target_language_instruction, model_name, max_tokens
+                client, reply, language_code, target_language_instruction, model_name, max_tokens
             )
             if translated:
                 reply = translated
@@ -104,9 +122,23 @@ def enforce_native_language_reply(
             except Exception:
                 pass
 
+        # Pass 3: strict script retry loop for Hindi/Telugu.
+        if language_code in {"hi-IN", "te-IN"}:
+            for _ in range(2):
+                if ensure_target_language_text(reply, language_code) and not contains_latin_letters(reply):
+                    break
+                try:
+                    strict_retry = translate_to_target_language(
+                        client, reply, language_code, target_language_instruction, model_name, max_tokens
+                    )
+                    if strict_retry:
+                        reply = strict_retry
+                except Exception:
+                    break
+
         if language_code not in {"hi-IN", "te-IN"}:
             return reply
-        if ensure_target_language_text(reply, language_code):
+        if ensure_target_language_text(reply, language_code) and not contains_latin_letters(reply):
             return reply
 
     return reply
@@ -269,8 +301,14 @@ if audio_input is not None:
 
     if language in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language):
         reply = fallback_google_translate(reply, language)
-        if language in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language):
-            st.warning("Could not force native script with current models. Try setting TRANSLATE_MODEL=gpt-4o-mini in Render.")
+        if language in {"hi-IN", "te-IN"} and (
+            not ensure_target_language_text(reply, language) or contains_latin_letters(reply)
+        ):
+            if language == "hi-IN":
+                reply = "क्षमा करें, अभी हिंदी में उत्तर तैयार करने में समस्या हो रही है। कृपया फिर से प्रयास करें।"
+            elif language == "te-IN":
+                reply = "క్షమించండి, ప్రస్తుతం తెలుగులో సమాధానం ఇవ్వడంలో సమస్య ఉంది. దయచేసి మళ్లీ ప్రయత్నించండి."
+            st.warning("Native-script enforcement failed for the selected model/provider response.")
 
     st.write(f"🤖 AI says: **{reply}**")
 
