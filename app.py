@@ -9,6 +9,8 @@ from gtts import gTTS
 
 # ---------------- CONFIG ----------------
 EURI_API_KEY = os.getenv("EURI_API_KEY")
+STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 
 client = OpenAI(
     api_key=EURI_API_KEY,
@@ -50,16 +52,32 @@ if audio_input is not None:
     }
     stt_lang = stt_lang_map.get(language, "en")
 
-    try:
-        with open(temp_wav.name, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language=stt_lang,
-            )
-    except Exception as err:
+    transcript = None
+    transcription_errors = []
+    stt_candidates = [STT_MODEL, "gpt-4o-mini-transcribe", "whisper-1"]
+    # Keep order while removing duplicates.
+    stt_candidates = list(dict.fromkeys(stt_candidates))
+
+    for model_name in stt_candidates:
+        try:
+            with open(temp_wav.name, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model=model_name,
+                    file=audio_file,
+                    language=stt_lang,
+                )
+            break
+        except Exception as err:
+            transcription_errors.append(f"{model_name}: {err}")
+
+    if transcript is None:
         os.remove(temp_wav.name)
-        st.error(f"Transcription failed: {err}")
+        st.error(
+            "Transcription failed for all configured models. "
+            "Set STT_MODEL in Render env vars to a model available in your EURI account."
+        )
+        with st.expander("Transcription error details"):
+            st.code("\n".join(transcription_errors))
         st.stop()
 
     user_text = transcript.text.strip()
@@ -71,7 +89,7 @@ if audio_input is not None:
     # ---------------- LLM CALL ----------------
     try:
         llm_response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": "Reply in the same language as the user."},
                 {"role": "user", "content": user_text},
