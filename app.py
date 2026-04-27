@@ -9,6 +9,7 @@ import re
 from openai import OpenAI
 from gtts import gTTS
 import edge_tts
+from deep_translator import GoogleTranslator
 
 # ---------------- CONFIG ----------------
 EURI_API_KEY = os.getenv("EURI_API_KEY")
@@ -109,6 +110,21 @@ def enforce_native_language_reply(
             return reply
 
     return reply
+
+
+def fallback_google_translate(text: str, language_code: str) -> str:
+    target_map = {
+        "hi-IN": "hi",
+        "te-IN": "te",
+        "es-ES": "es",
+    }
+    target = target_map.get(language_code)
+    if not target:
+        return text
+    try:
+        return GoogleTranslator(source="auto", target=target).translate(text)
+    except Exception:
+        return text
 
 
 def synthesize_speech(text: str, language_code: str) -> str:
@@ -252,7 +268,9 @@ if audio_input is not None:
     )
 
     if language in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language):
-        st.warning("Could not force native script with current model. Try setting TRANSLATE_MODEL=gpt-4o-mini in Render.")
+        reply = fallback_google_translate(reply, language)
+        if language in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language):
+            st.warning("Could not force native script with current models. Try setting TRANSLATE_MODEL=gpt-4o-mini in Render.")
 
     st.write(f"🤖 AI says: **{reply}**")
 
