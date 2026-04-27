@@ -11,6 +11,7 @@ from gtts import gTTS
 EURI_API_KEY = os.getenv("EURI_API_KEY")
 STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
+CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
 
 client = OpenAI(
     api_key=EURI_API_KEY,
@@ -94,6 +95,7 @@ if audio_input is not None:
                 {"role": "system", "content": "Reply in the same language as the user."},
                 {"role": "user", "content": user_text},
             ],
+            max_tokens=CHAT_MAX_TOKENS,
         )
     except Exception as err:
         os.remove(temp_wav.name)
