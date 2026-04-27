@@ -15,6 +15,7 @@ EURI_API_KEY = os.getenv("EURI_API_KEY")
 STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
+TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "gpt-4o-mini")
 
 
 def ensure_target_language_text(text: str, language_code: str) -> str:
@@ -67,6 +68,47 @@ def answer_directly_in_target_language(
         max_tokens=max_tokens,
     )
     return response.choices[0].message.content.strip()
+
+
+def enforce_native_language_reply(
+    client: OpenAI, user_text: str, draft_reply: str, language_code: str,
+    target_language_instruction: str, max_tokens: int
+) -> str:
+    if language_code == "en-US":
+        return draft_reply
+
+    model_candidates = [TRANSLATE_MODEL, CHAT_MODEL, "gpt-4o-mini"]
+    model_candidates = list(dict.fromkeys(model_candidates))
+    reply = draft_reply
+
+    for model_name in model_candidates:
+        # Pass 1: translate current draft to target language.
+        try:
+            translated = translate_to_target_language(
+                client, reply, target_language_instruction, model_name, max_tokens
+            )
+            if translated:
+                reply = translated
+        except Exception:
+            pass
+
+        # Pass 2: if script-based language still wrong, regenerate from source question.
+        if language_code in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language_code):
+            try:
+                regenerated = answer_directly_in_target_language(
+                    client, user_text, target_language_instruction, model_name, max_tokens
+                )
+                if regenerated:
+                    reply = regenerated
+            except Exception:
+                pass
+
+        if language_code not in {"hi-IN", "te-IN"}:
+            return reply
+        if ensure_target_language_text(reply, language_code):
+            return reply
+
+    return reply
 
 
 def synthesize_speech(text: str, language_code: str) -> str:
@@ -205,28 +247,12 @@ if audio_input is not None:
         st.stop()
 
     reply = llm_response.choices[0].message.content.strip()
+    reply = enforce_native_language_reply(
+        client, user_text, reply, language, target_language_instruction, CHAT_MAX_TOKENS
+    )
 
-    # Always do a translation-enforcement pass for non-English output.
-    if language != "en-US":
-        try:
-            enforced = translate_to_target_language(
-                client, reply, target_language_instruction, CHAT_MODEL, CHAT_MAX_TOKENS
-            )
-            if enforced:
-                reply = enforced
-        except Exception:
-            pass
-
-    # For script-based languages, ensure native script is actually used.
     if language in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language):
-        try:
-            fallback_reply = answer_directly_in_target_language(
-                client, user_text, target_language_instruction, CHAT_MODEL, CHAT_MAX_TOKENS
-            )
-            if ensure_target_language_text(fallback_reply, language):
-                reply = fallback_reply
-        except Exception:
-            pass
+        st.warning("Could not force native script with current model. Try setting TRANSLATE_MODEL=gpt-4o-mini in Render.")
 
     st.write(f"🤖 AI says: **{reply}**")
 
