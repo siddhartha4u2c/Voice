@@ -31,6 +31,44 @@ def ensure_target_language_text(text: str, language_code: str) -> str:
     return ""
 
 
+def translate_to_target_language(client: OpenAI, text: str, target_language_instruction: str, model: str, max_tokens: int) -> str:
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    f"Translate the text into {target_language_instruction}. "
+                    "Return only translated text. Do not include English."
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def answer_directly_in_target_language(
+    client: OpenAI, user_text: str, target_language_instruction: str, model: str, max_tokens: int
+) -> str:
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    f"Answer the question only in {target_language_instruction}. "
+                    "Do not use English. Keep response concise and natural."
+                ),
+            },
+            {"role": "user", "content": user_text},
+        ],
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content.strip()
+
+
 def synthesize_speech(text: str, language_code: str) -> str:
     voice_map = {
         "en-US": "en-US-AriaNeural",
@@ -167,25 +205,26 @@ if audio_input is not None:
         st.stop()
 
     reply = llm_response.choices[0].message.content.strip()
-    if not ensure_target_language_text(reply, language):
+
+    # Always do a translation-enforcement pass for non-English output.
+    if language != "en-US":
         try:
-            translate_response = client.chat.completions.create(
-                model=CHAT_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Translate the text into {target_language_instruction}. "
-                            "Return only the translated text, natural and fluent."
-                        ),
-                    },
-                    {"role": "user", "content": reply},
-                ],
-                max_tokens=CHAT_MAX_TOKENS,
+            enforced = translate_to_target_language(
+                client, reply, target_language_instruction, CHAT_MODEL, CHAT_MAX_TOKENS
             )
-            translated = translate_response.choices[0].message.content.strip()
-            if ensure_target_language_text(translated, language):
-                reply = translated
+            if enforced:
+                reply = enforced
+        except Exception:
+            pass
+
+    # For script-based languages, ensure native script is actually used.
+    if language in {"hi-IN", "te-IN"} and not ensure_target_language_text(reply, language):
+        try:
+            fallback_reply = answer_directly_in_target_language(
+                client, user_text, target_language_instruction, CHAT_MODEL, CHAT_MAX_TOKENS
+            )
+            if ensure_target_language_text(fallback_reply, language):
+                reply = fallback_reply
         except Exception:
             pass
 
