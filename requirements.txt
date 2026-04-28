@@ -3,3 +3,5 @@ openai
 gTTS
 edge-tts
 deep-translator
+python-dotenv
+
