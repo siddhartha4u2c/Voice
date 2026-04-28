@@ -10,9 +10,11 @@ from openai import OpenAI
 from gtts import gTTS
 import edge_tts
 from deep_translator import GoogleTranslator
+from dotenv import load_dotenv
 
 # ---------------- CONFIG ----------------
-EURI_API_KEY = os.getenv("EURI_API_KEY")
+load_dotenv()
+EURI_API_KEY = os.getenv("EURI_API_KEY") or os.getenv("OPENAI_API_KEY")
 STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "512"))
@@ -200,15 +202,14 @@ st.set_page_config(page_title="Voice AI Assistant", layout="centered")
 st.title("🎤 Voice AI Assistant (Multilingual)")
 st.caption("Works on Render using browser microphone input.")
 
-language = st.selectbox(
-    "Select Language",
-    {
-        "English": "en-US",
-        "Hindi": "hi-IN",
-        "Telugu": "te-IN",
-        "Spanish": "es-ES"
-    }
-)
+language_options = {
+    "English": "en-US",
+    "Hindi": "hi-IN",
+    "Telugu": "te-IN",
+    "Spanish": "es-ES",
+}
+selected_language_label = st.selectbox("Select Language", list(language_options.keys()))
+language = language_options[selected_language_label]
 
 if not EURI_API_KEY:
     st.error("EURI_API_KEY is missing. Add it in Render Environment Variables.")
